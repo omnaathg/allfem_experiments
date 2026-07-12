@@ -38,29 +38,32 @@ Everything below runs inside this session. To check on it from another
 shell later: `tmux attach -t allfem`, or non-interactively:
 `tmux capture-pane -t allfem:0 -p | tail -40`.
 
-## 2. Transfer the two files onto the pod
+## 2. Get the repo onto the pod
 
-From your local machine (wherever the files currently live):
-
-```bash
-runpodctl send runpod_allfem_cantilever.sh
-runpodctl send test_allfem_cantilever.py
-```
-
-Each `send` prints a one-time code like `1221-memo-optimal-piano-17`. On the
-pod, inside the tmux session (or a second tmux window so you don't disturb a
-running install — `tmux new-window -t allfem`):
+No `runpodctl send`/`receive` needed — `runpod_allfem_cantilever.sh` and
+`test_allfem_cantilever.py` live in the git repo, so just clone it (or pull
+the latest) directly on the pod, inside the tmux session:
 
 ```bash
-cd ~   # or /workspace — just be consistent, the script finds
-       # test_allfem_cantilever.py next to itself either way
-runpodctl receive <code-for-the-.sh-file>
-runpodctl receive <code-for-the-.py-file>
+cd ~   # or /workspace — just be consistent
+git clone https://github.com/omnaathg/allfem_experiments.git
+cd allfem_experiments
 ```
 
-Confirm both landed: `ls -la runpod_allfem_cantilever.sh test_allfem_cantilever.py`
+If you already have a clone from a previous session and just pushed new
+changes locally, pull instead of re-cloning:
+
+```bash
+cd ~/allfem_experiments && git pull
+```
+
+The repo is public, so no auth is needed for either `clone` or `pull`.
+Confirm the files are there:
+`ls -la runpod_allfem_cantilever.sh test_allfem_cantilever.py`
 
 ## 3. Run it
+
+From inside the `allfem_experiments` directory:
 
 ```bash
 chmod +x runpod_allfem_cantilever.sh
@@ -123,8 +126,16 @@ steps are skipped and it jumps straight back to the test.
 ```bash
 source /opt/conda/bin/activate fenics
 ollama pull <model-tag>
-python3 ~/test_allfem_cantilever.py --model <model-tag>
+python3 ~/allfem_experiments/test_allfem_cantilever.py --model <model-tag>
 ```
 
 No need to re-run the whole script — Ollama and the conda env are already
 set up; this just pulls the new model and re-runs step 4 directly.
+
+## 6. Pushing script changes back
+
+Since the pod now has its own clone, any edits you make to the scripts
+*on the pod* should be pushed from your local machine's copy instead (the
+pod clone is read-only from GitHub's point of view unless you set up your
+own credentials there). Edit locally, `git push`, then `git pull` on the
+pod to pick up the change — no file-transfer step required either way.
