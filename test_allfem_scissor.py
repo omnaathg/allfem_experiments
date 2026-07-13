@@ -101,6 +101,22 @@ the paper's reported 0.654N as an order-of-magnitude sanity check, not
 a precision validation — unlike the cantilever test, tight numerical
 agreement isn't a reasonable bar here given the approximations.
 
+GEOMETRY INPUT IS TEXT-ONLY -- this is a deliberate, noted limitation,
+not an oversight. The model is never shown the paper's actual figures
+(e.g. Figure 3b's sheath assembly, with its separate moving/fixed parts
+and cylindrical support) or any CAD/mesh file. Every geometric and
+boundary-condition detail below -- segment lengths, kink angles,
+thickness taper, support locations -- is conveyed purely as prose in
+PROBLEM_STATEMENT, and the model (none of the four ALL-FEM Ollama tags
+are vision-capable) has to translate that description into mesh-
+building and BC code with no visual reference at all. This is consistent
+with how the ALL-FEM paper itself poses its 39 benchmarks (text-to-
+FEniCS, not diagram-to-FEniCS), so it's kept as-is here rather than
+switching to multimodal prompting or a structured/parametric geometry
+input -- but it's a real source of ambiguity on top of the surrogate
+simplifications above, and worth keeping in mind when reading a FAIL as
+"the model can't do FEA" vs. "the model guessed wrong from a paragraph."
+
 REQUIREMENTS: same as test_allfem_cantilever.py (Ollama running
 locally with the ALL-FEM model(s) pulled, and a FEniCS/dolfinx
 environment on PATH as `python3`).
