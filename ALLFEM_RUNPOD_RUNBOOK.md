@@ -25,6 +25,12 @@ bug in that model's output, not an environment problem.
 3. (Optional) Under **Expose HTTP Ports**, add `11434` only if you want to
    hit Ollama from outside the pod — not required for this script.
 4. Open the pod's Web Terminal.
+5. Set up claude
+```bash
+curl -fsSL https://claude.ai/install.sh | bash 
+
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc 
+```
 
 ## 1. Start a persistent tmux session
 
