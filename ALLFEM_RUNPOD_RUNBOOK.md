@@ -71,15 +71,20 @@ The repo is public, so no auth is needed for either clone or pull. Confirm
 the files are there:
 `ls -la runpod_allfem_cantilever.sh test_allfem_cantilever.py test_allfem_scissor.py`
 
-## 3. Run it (cantilever, or a quick-start scissor two-agent run)
+## 3. Run it (cantilever only — see §7 to bootstrap-and-run the scissor test)
 
 ```bash
 chmod +x runpod_allfem_cantilever.sh
 ./runpod_allfem_cantilever.sh                                    # default: cantilever, qwen3-short_think-fenics-local
 # or: ./runpod_allfem_cantilever.sh rushikesh_67/llama3.2-2new    # cantilever, different model
-# or: ./runpod_allfem_cantilever.sh rushikesh_67/qwen3-short_think-fenics-local test_allfem_scissor.py
-#     # scissor experiment, two-agent framework (the script's only mode — see §7 for multi-agent)
 ```
+
+The script only ever runs `test_allfem_cantilever.py` — it takes `--model`
+as its sole `$1` and does not accept a second positional arg to pick a
+different test script (any extra args are silently ignored). To bootstrap
+the environment and then run the scissor test in one go, run this script
+once for the cantilever test (or just to build the `fenics` conda env),
+then call `test_allfem_scissor.py` directly per §7.
 
 Pipe through `tee` if you want a saved log as well as live output:
 
@@ -222,3 +227,74 @@ including per-role overrides (`--coder-model`, `--corrector-model`,
 `--coordinator-model`, `--formulator-model`, `--planner-model`,
 `--evaluator-model`) and `--max-coordinator-turns` (safety cap on the
 dynamic Coordinator's routing rounds, default 8).
+
+## 8. Scissor test: recurring model bug categories (fed into the Debugger)
+
+Both `qwen3-short_think-fenics-local` (two-agent) and the
+`llama3.3:70b`-coordinated multi-agent run FAILed outright on the scissor
+problem — never producing a parseable `SCISSOR_FORCE_N`. Hand-fixing the
+two-agent output (see `generated_fenics_scissor_code.py`, regenerated fresh
+each run — not tracked in git) surfaced six distinct bug categories, several
+of which don't crash at all (the script runs and prints a number, just a
+physically meaningless one):
+
+1. **Missing start point** — building the centerline as only segment *end*
+   points (never storing the very first vertex) silently drops the L1
+   segment and moves the "free end" to the wrong location.
+2. **Zero-width polygon** — closing the bare centerline into a polygon with
+   no thickness offset gives a degenerate sliver, not a real cross-section.
+3. **Mesher crash from kink geometry** — offsetting each side of a kink
+   with its own segment's normal creates a second corner point only
+   `~half_thickness * sin(kink angle)` away from the first — far below the
+   mesh's target cell size, which crashes CGAL. Needs a single mitred
+   corner point per kink instead.
+4. **Non-physical roller** — pinning both the top and bottom surface points
+   of a support cross-section (instead of one) creates an internal
+   force couple that resists rotation, i.e. it behaves like a second
+   clamp, not a roller.
+5. **Wrong reaction-force method** — computing `assemble(dot(u_sol, v)*ds(...))`
+   integrates the *displacement field*, which has the wrong physical units
+   and isn't a force at all, though it runs without error. The correct
+   approach is the discrete equilibrium residual,
+   `assemble(action(a, u_sol) - L)`, summed over the constrained boundary's
+   DOFs.
+6. **Traction in the wrong component** (the one that actually mattered
+   most): bending stress `sigma_xx(y)` belongs in the *axial* component of
+   the Cauchy traction on an end face (`t = sigma . n`), not the transverse
+   component. Putting it in the wrong component doesn't error either — it
+   silently produces a solution ~1000x too stiff (near-zero deflection).
+
+These are now baked into `COMMON_PITFALLS` in `test_allfem_scissor.py`,
+which is fed into both debugger-role prompts (`DEBUG_INSTRUCTIONS` for
+two-agent, `CODER_RETRY_INSTRUCTIONS` for multi-agent) — but *not* the
+initial Coder prompt, so first-attempt behavior is unaffected. Whether this
+actually helps either model self-correct on retry hasn't been tested yet.
+
+With all six fixed by hand, `qwen3-short_think-fenics-local`'s two-agent
+output gives a mesh-converged `SCISSOR_FORCE_N ≈ 1.357 N` against the
+paper's reference of 0.654 N (ratio 2.07x — inside the harness's own
+0.2x–5x "PLAUSIBLE" band for this simplified surrogate).
+
+### Open geometry gap: L7
+
+The paper's parameter list includes an `L7 = 0.85mm` "separate lever link"
+that `PROBLEM_STATEMENT`/`PARAMS` in `test_allfem_scissor.py` never
+mentions at all — L1-L6 only. Per clarification: L7 attaches at the L2-L3
+junction (not a continuation of the main chain), protrudes transversely,
+and is what the outer casing/sheath actually contacts to actuate the
+mechanism (the casing moves opposite to the tip, levering against L7's
+tip) — the main chain isn't touched by the sheath directly.
+
+Added L7 by hand as a small triangular tab fused (CSG union) onto the main
+chain at the L2-L3 junction, with the roller/sheath-contact constraint
+moved from the main chain's surface to the tab's tip. Result was
+essentially unchanged (`1.357 N` either way, <0.01% difference) — L7's
+0.85mm length is short enough relative to the ~28mm mechanism that it
+doesn't meaningfully perturb the tip's far-field transverse reaction under
+this loading. Still open: whether the roller there should constrain the
+lever tip's *transverse* displacement (current assumption, carried over
+from the pre-L7 model) or its *axial* displacement (arguably a better
+match for "casing moves opposite to the tip" — i.e. genuine axial
+casing motion levered into a transverse/moment effect via the 0.85mm arm),
+which would be a materially different mechanism and likely change the
+result more.

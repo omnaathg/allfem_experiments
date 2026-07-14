@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+generated_fenics_code.py
+generated_fenics_scissor_code.py

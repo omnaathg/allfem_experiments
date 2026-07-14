@@ -93,6 +93,9 @@ else
 fi
 
 # shellcheck disable=SC1091
+# conda's own activation scripts aren't `set -u`-safe (e.g. gcc_linux-64
+# references unset SYS_SYSROOT), so relax nounset around sourcing them.
+set +u
 source /opt/conda/bin/activate
 
 echo "Accepting Anaconda default-channel Terms of Service (idempotent, needed on fresh pods)..."
@@ -107,6 +110,7 @@ else
 fi
 
 conda activate "$FENICS_ENV_NAME"
+set -u
 
 # --- [3/4] Sanity check harness is present -----------------------------
 echo

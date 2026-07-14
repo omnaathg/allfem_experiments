@@ -238,6 +238,58 @@ CODE_INSTRUCTIONS = textwrap.dedent("""\
 # Original single-prompt form, used by the "two-agent" Coder stage.
 PROMPT = CODE_INSTRUCTIONS + "\n" + PROBLEM_STATEMENT
 
+# Failure patterns observed (and hand-fixed) across real runs of this
+# benchmark. Fed to the Debugger/retry stages only -- not the initial Coder
+# prompt -- since several of these don't raise an error at all (the script
+# runs and prints a number) and are only catchable by knowing to look for
+# them specifically.
+COMMON_PITFALLS = textwrap.dedent("""\
+    COMMON PITFALLS SEEN IN PAST ATTEMPTS AT THIS PROBLEM (check for these
+    specifically -- some of them don't throw an error, they just make the
+    script silently print a physically meaningless number):
+      - The centerline must include its own starting point (the free end
+        of L1). Building it as only a list of segment *end* points and
+        forgetting the very first vertex silently drops the L1 segment
+        and moves the "free end" to the wrong location.
+      - A polygon built directly from centerline points, with no
+        thickness offset, is a zero-width sliver, not a real
+        cross-section. Offset each point by +/- half the local thickness,
+        perpendicular to the local segment direction, to get a proper 2D
+        profile.
+      - At a kink, do not add two separate corner points (one per
+        adjoining segment's own offset direction) -- the resulting edge
+        can be far shorter than the mesh's target cell size and crash the
+        2D mesh generator. Use a single mitred corner (the normalized
+        average of the two segments' normals, scaled by
+        1/cos(half the kink angle)) instead.
+      - A roller/cylindrical support restrains translation but must leave
+        rotation free. Pinning both the top and bottom surface points of
+        a cross-section in the transverse direction creates an internal
+        force couple that resists rotation too -- i.e. it behaves like a
+        second clamp, not a roller. Constrain only one point (or use a
+        genuinely rotation-free formulation).
+      - Reaction forces must be computed from the discrete equilibrium
+        residual, e.g. `assemble(action(a, u_sol) - L)` summed over the
+        DOFs on the constrained boundary -- NOT by integrating the
+        displacement field itself over `ds` (e.g.
+        `assemble(dot(u_sol, v)*ds(...))`), which has the wrong physical
+        units (it is not a force at all) and will look like it "works"
+        (no error, prints a number) while being meaningless.
+      - On a face whose outward normal points in the beam's axial
+        direction, the traction from a bending stress sigma_xx belongs in
+        the AXIAL component of the traction vector (Cauchy relation
+        t = sigma . n), not the transverse component. Putting the bending
+        stress in the wrong component doesn't crash either -- it just
+        silently produces a far-too-stiff, near-zero-deflection solution.
+      - This is a 2D plane-elasticity model of a part with a real
+        out-of-plane width w: every `ds()`-based force/moment integral is
+        implicitly "per unit depth". To report an actual force in
+        Newtons, multiply the 2D-computed reaction by w after solving --
+        don't divide by w a second time inside the traction expression as
+        well, and don't forget the multiplication when printing the
+        final result.
+    """)
+
 # ---------------------------------------------------------------------------
 # 1b. Agent prompts -- two-agent mode (Coder + Debugger, unchanged from the
 #     original harness)
@@ -249,6 +301,8 @@ DEBUG_INSTRUCTIONS = textwrap.dedent("""\
     still prints the required result line. Return the FULL corrected
     script in a single Python code block -- do not return a diff or a
     partial snippet.
+
+    {pitfalls}
 
     PROBLEM:
     {problem}
@@ -317,6 +371,8 @@ CODER_RETRY_INSTRUCTIONS = textwrap.dedent("""\
     through the Corrector agent). Fix it and return the FULL corrected
     script in a single Python code block -- do not return a diff or a
     partial snippet.
+
+    {pitfalls}
 
     FORMAL SPECIFICATION:
     {spec}
@@ -461,7 +517,7 @@ def coder_stage(model: str, host: str, spec_text: str) -> tuple:
 
 def debugger_stage(model: str, host: str, problem_text: str, code: str, error_tail: str) -> str:
     prompt = DEBUG_INSTRUCTIONS.format(
-        problem=problem_text, code=code, error_tail=error_tail[-4000:]
+        pitfalls=COMMON_PITFALLS, problem=problem_text, code=code, error_tail=error_tail[-4000:]
     )
     reply = call_ollama(model, prompt, host)
     new_code = extract_code(reply)
@@ -560,7 +616,7 @@ def run_coder_subsystem(coder_model: str, corrector_model: str, host: str,
         print(f"\n--- Executor reported an error; back to FEniCS Coder "
               f"(retry {turns_used}/{max_debug_turns}) ---")
         retry_prompt = CODER_RETRY_INSTRUCTIONS.format(
-            spec=spec, code=code, error_tail=output[-4000:]
+            pitfalls=COMMON_PITFALLS, spec=spec, code=code, error_tail=output[-4000:]
         )
         reply = call_ollama(coder_model, retry_prompt, host)
         code = extract_code(reply)
