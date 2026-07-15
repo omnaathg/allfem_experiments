@@ -83,6 +83,41 @@ Paste this whole block into the tmux session. It's idempotent — each step
 checks whether it's already done, so re-running after a pod restart just
 skips ahead.
 
+**Updated after a live run on 2026-07-15** — the naive version of this
+script (conda env + `pip install -r requirements.txt` + `pip install -e .`)
+passes conda's own solve but fails two of the four sanity checks and the
+"install the CLI" step, all for reasons specific to this repo/toolchain
+combination rather than anything pod-specific. The three fixes are baked
+into the script below; the *why* for each is in the inline comments and
+repeated in Troubleshooting (§6) in case they resurface:
+
+1. `import gmsh` fails with `OSError: libXft.so.2: cannot open shared
+   object file` — `requirements.txt` pins `gmsh>=4.11.0` via **pip**, which
+   silently shadows the conda-forge `gmsh` installed in step 2 with a PyPI
+   wheel that dynamically links a system X11 font library not present on a
+   stock Ubuntu pod. Fixed with one `apt-get install libxft2`.
+2. `import FreeCAD` fails with `ModuleNotFoundError` even though the conda
+   package installed cleanly — conda-forge's FreeCAD 1.1.0 build puts its
+   compiled bindings (`FreeCAD.so`, `FreeCADGui.so`) in `$CONDA_PREFIX/lib`,
+   not `site-packages`, so they're never on `sys.path` by default. Fixed by
+   writing a conda `activate.d`/`deactivate.d` hook so `PYTHONPATH` is set
+   automatically on every future `conda activate feagpt` — no per-shell
+   manual export needed.
+3. `pip install -e .` fails outright with `AssertionError: Exactly one
+   .egg-info should have been produced, but found 0` — as of the commit
+   tested, this repo's `setup.py` is an **empty file** and there's no
+   `pyproject.toml`. Even if packaging were fixed, there's no
+   `console_scripts`/`entry_points` defined anywhere in the repo, so a
+   `feagpt` command would never exist either way. **The actual working
+   entry point is the repo's own `main.py`**, a click CLI with the same
+   `run` / `interactive` / `batch` subcommands, runnable straight from the
+   repo root with no install step (the `feagpt/` package is just plain
+   importable relative to cwd). Every `feagpt run "..."` command elsewhere
+   in this runbook is really `python main.py run "..."` — that substitution
+   is made throughout §4/§5 below. The bootstrap still attempts
+   `pip install -e .` (non-fatal) in case upstream fixes packaging later;
+   check the sanity checks in step [5/5] rather than assuming either way.
+
 ```bash
 cat > ~/bootstrap_feagpt.sh << 'BOOTSTRAP'
 #!/usr/bin/env bash
@@ -91,7 +126,7 @@ set -euo pipefail
 ENV_NAME="feagpt"
 REPO_DIR="${HOME}/FeaGPT"
 
-echo "=== [1/4] Miniconda ==="
+echo "=== [1/5] Miniconda ==="
 if [ ! -d /opt/conda ]; then
     curl -fsSL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o /tmp/miniconda.sh
     bash /tmp/miniconda.sh -b -p /opt/conda
@@ -105,7 +140,7 @@ conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/ma
 conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r >/dev/null 2>&1 || true
 
 echo
-echo "=== [2/4] FreeCAD + Gmsh + CalculiX (conda-forge, one solve) ==="
+echo "=== [2/5] FreeCAD + Gmsh + CalculiX (conda-forge, one solve) ==="
 if ! conda env list | grep -q "^${ENV_NAME} "; then
     conda create -y -n "$ENV_NAME" -c conda-forge \
         python=3.10 freecad "gmsh>=4.11" calculix
@@ -114,8 +149,37 @@ else
 fi
 conda activate "$ENV_NAME"
 
+# Known fix #2: conda-forge's FreeCAD bindings live in $CONDA_PREFIX/lib,
+# not site-packages. Bake PYTHONPATH into the env's own activate hook so
+# every future `conda activate feagpt` (this shell and any new one) picks
+# it up automatically.
+ACTIVATE_D="${CONDA_PREFIX}/etc/conda/activate.d"
+DEACTIVATE_D="${CONDA_PREFIX}/etc/conda/deactivate.d"
+mkdir -p "$ACTIVATE_D" "$DEACTIVATE_D"
+if [ ! -f "${ACTIVATE_D}/freecad_pythonpath.sh" ]; then
+    cat > "${ACTIVATE_D}/freecad_pythonpath.sh" << 'HOOK'
+export _FEAGPT_OLD_PYTHONPATH="${PYTHONPATH:-}"
+export PYTHONPATH="${CONDA_PREFIX}/lib:${PYTHONPATH:-}"
+HOOK
+    cat > "${DEACTIVATE_D}/freecad_pythonpath.sh" << 'HOOK'
+export PYTHONPATH="${_FEAGPT_OLD_PYTHONPATH:-}"
+unset _FEAGPT_OLD_PYTHONPATH
+HOOK
+fi
+# activate.d only fires on `conda activate`, and we already ran that above
+# before writing the hook — so apply it to *this* script's shell too.
+export PYTHONPATH="${CONDA_PREFIX}/lib:${PYTHONPATH:-}"
+
 echo
-echo "=== [3/4] FeaGPT ==="
+echo "=== [3/5] System dependency for gmsh (known fix #1) ==="
+if ! ldconfig -p | grep -q libXft.so.2; then
+    apt-get update -qq && apt-get install -y -qq libxft2
+else
+    echo "libXft.so.2 already present."
+fi
+
+echo
+echo "=== [4/5] FeaGPT ==="
 if [ ! -d "$REPO_DIR" ]; then
     git clone https://github.com/naividh/FeaGPT.git "$REPO_DIR"
 else
@@ -124,14 +188,17 @@ else
 fi
 cd "$REPO_DIR"
 pip install -r requirements.txt
-pip install -e .
+# Known fix #3: expected to fail on the repo state described above.
+# Non-fatal; use `python main.py run ...` regardless of outcome.
+pip install -e . 2>&1 | tail -5 || echo "pip install -e . failed as expected (see §3 known fix #3) -- use 'python main.py run ...' instead."
 
 echo
-echo "=== [4/4] Sanity checks ==="
+echo "=== [5/5] Sanity checks ==="
 echo -n "ccx (CalculiX):   "; command -v ccx || echo "NOT ON PATH"
 echo -n "gmsh:             "; python3 -c "import gmsh; print(gmsh.__file__)" 2>/dev/null || echo "NOT IMPORTABLE"
 echo -n "FreeCAD:          "; python3 -c "import FreeCAD; print(FreeCAD.__file__)" 2>/dev/null || echo "NOT IMPORTABLE"
-echo -n "feagpt CLI:       "; command -v feagpt || echo "NOT ON PATH"
+echo -n "feagpt CLI:       "; command -v feagpt || echo "NOT ON PATH (expected -- see known fix #3; use 'python main.py')"
+echo -n "main.py CLI:      "; (cd "$REPO_DIR" && python3 main.py --help >/dev/null 2>&1 && echo "OK") || echo "FAILED"
 
 echo
 echo "Bootstrap done. Next: export GEMINI_API_KEY, then run a case (see runbook)."
@@ -141,19 +208,30 @@ chmod +x ~/bootstrap_feagpt.sh
 ~/bootstrap_feagpt.sh 2>&1 | tee ~/feagpt_install.log
 ```
 
-If any of the four sanity checks in step [4/4] fail, stop and fix it before
-moving on — see Troubleshooting (§6). The most common miss is `ccx` not on
-`PATH` because it landed in the conda env's `bin/` but you're in a shell
-that hasn't activated the env; always `conda activate feagpt` in new shells
-before running anything below.
+If `ccx`, `gmsh`, or `FreeCAD` in step [5/5] still fail after the fixes
+above, stop and check Troubleshooting (§6) — don't proceed to test cases on
+a broken sanity check. `feagpt CLI: NOT ON PATH` is *expected* given known
+fix #3 above; what matters is `main.py CLI: OK`. The most common residual
+miss is being in a shell that hasn't run `conda activate feagpt` at all —
+always do that in new shells before running anything below.
 
 Then, every new shell/tmux window:
 
 ```bash
 source /opt/conda/bin/activate feagpt
-export GEMINI_API_KEY="paste-your-key-here"
 cd ~/FeaGPT
+read -s -p "Gemini key: " GEMINI_API_KEY && export GEMINI_API_KEY
 ```
+
+That last line reads the key straight into the env var without ever typing
+it as a plain command-line argument, so it doesn't land in shell history or
+any terminal-session logging (including AI coding assistants sharing this
+shell, if you're using one) — same effect as
+`export GEMINI_API_KEY="..."` but without the exposure. If a key ever does
+end up somewhere it shouldn't (pasted into a chat, committed, etc.), treat
+it as compromised and rotate it at
+[Google AI Studio](https://aistudio.google.com/apikey) immediately rather
+than trying to scrub the exposure after the fact.
 
 ---
 
@@ -182,10 +260,12 @@ delta = P*L^3 / (3*E*I) = 1000 * 500^3 / (3 * 200000 * 520833.3)
 
 Run it one-shot via the CLI — this is the only execution mode FeaGPT
 actually documents (there's no single-agent/multi-agent toggle to choose
-between the way there was in ALL-FEM; see the callout at the top):
+between the way there was in ALL-FEM; see the callout at the top). Command
+below uses `python main.py run` per the known-fix #3 substitution in §3 —
+run it from `~/FeaGPT` with the `feagpt` conda env active:
 
 ```bash
-feagpt run "Analyze a cantilever beam, 500mm long, 50mm square cross-section, steel, with 1000N downward force at the free end" 2>&1 | tee ~/feagpt_beam.log
+python main.py run "Analyze a cantilever beam, 500mm long, 50mm square cross-section, steel, with 1000N downward force at the free end" 2>&1 | tee ~/feagpt_beam.log
 ```
 
 Check the printed max von Mises stress / tip deflection / safety factor
@@ -240,7 +320,7 @@ output against, the same way the beam case checks against Euler-Bernoulli:
 ### 5a. Jaw opening (forceps function)
 
 ```bash
-feagpt run "Analyze a monolithic compliant forceps-scissors surgical instrument, 5mm overall diameter, 15mm overall length, made of 316L stainless steel with Young's modulus 193000 MPa, Poisson's ratio 0.3, density 8000 kg/m^3. The jaw mechanism is a chain of straight flexure beam links, mirrored about the centerline: L1=3mm rear actuation link, L2=4mm connector link, L3=8mm main flexure beam inclined at 6 degrees to the centerline passing through the sheath, L4=9mm jaw beam, L5=2mm and L6=2mm jaw-tip segments inclined at 2 degrees forming a sharp cutting tip, and a 0.85mm lever link L7 perpendicular to L3 near the sheath entrance. Beam cross-section width 0.4mm. Extrude L1 and L2 with thickness 1mm; extrude L4, L5, and L6 with thickness 0.5mm. A rigid cylindrical sheath of 5mm outer diameter surrounds the L3/L4 region. Fix the jaw tip end. Apply a 10mm displacement to the sheath in the jaw-opening axial direction. Perform static structural analysis and report the jaw displacement normal to the opening direction." 2>&1 | tee ~/feagpt_forceps_opening.log
+python main.py run "Analyze a monolithic compliant forceps-scissors surgical instrument, 5mm overall diameter, 15mm overall length, made of 316L stainless steel with Young's modulus 193000 MPa, Poisson's ratio 0.3, density 8000 kg/m^3. The jaw mechanism is a chain of straight flexure beam links, mirrored about the centerline: L1=3mm rear actuation link, L2=4mm connector link, L3=8mm main flexure beam inclined at 6 degrees to the centerline passing through the sheath, L4=9mm jaw beam, L5=2mm and L6=2mm jaw-tip segments inclined at 2 degrees forming a sharp cutting tip, and a 0.85mm lever link L7 perpendicular to L3 near the sheath entrance. Beam cross-section width 0.4mm. Extrude L1 and L2 with thickness 1mm; extrude L4, L5, and L6 with thickness 0.5mm. A rigid cylindrical sheath of 5mm outer diameter surrounds the L3/L4 region. Fix the jaw tip end. Apply a 10mm displacement to the sheath in the jaw-opening axial direction. Perform static structural analysis and report the jaw displacement normal to the opening direction." 2>&1 | tee ~/feagpt_forceps_opening.log
 ```
 
 Compare the reported jaw-normal displacement to **1.049mm**.
@@ -251,7 +331,7 @@ Same geometry block, different BC/load — reuse the geometry description
 verbatim and swap only the boundary-condition sentence:
 
 ```bash
-feagpt run "Analyze a monolithic compliant forceps-scissors surgical instrument, 5mm overall diameter, 15mm overall length, made of 316L stainless steel with Young's modulus 193000 MPa, Poisson's ratio 0.3, density 8000 kg/m^3. The jaw mechanism is a chain of straight flexure beam links, mirrored about the centerline: L1=3mm rear actuation link, L2=4mm connector link, L3=8mm main flexure beam inclined at 6 degrees to the centerline passing through the sheath, L4=9mm jaw beam, L5=2mm and L6=2mm jaw-tip segments inclined at 2 degrees forming a sharp cutting tip, and a 0.85mm lever link L7 perpendicular to L3 near the sheath entrance. Beam cross-section width 0.4mm. Extrude L1 and L2 with thickness 1mm; extrude L4, L5, and L6 with thickness 0.5mm. A rigid cylindrical sheath of 5mm outer diameter surrounds the L3/L4 region. Apply a fully fixed cylindrical support to the sheath. Apply a 20 N-mm torsional moment at the L2-L3 junction. Fix the jaw tip and report the reaction force there as the cutting force. Perform static structural analysis." 2>&1 | tee ~/feagpt_scissor_force.log
+python main.py run "Analyze a monolithic compliant forceps-scissors surgical instrument, 5mm overall diameter, 15mm overall length, made of 316L stainless steel with Young's modulus 193000 MPa, Poisson's ratio 0.3, density 8000 kg/m^3. The jaw mechanism is a chain of straight flexure beam links, mirrored about the centerline: L1=3mm rear actuation link, L2=4mm connector link, L3=8mm main flexure beam inclined at 6 degrees to the centerline passing through the sheath, L4=9mm jaw beam, L5=2mm and L6=2mm jaw-tip segments inclined at 2 degrees forming a sharp cutting tip, and a 0.85mm lever link L7 perpendicular to L3 near the sheath entrance. Beam cross-section width 0.4mm. Extrude L1 and L2 with thickness 1mm; extrude L4, L5, and L6 with thickness 0.5mm. A rigid cylindrical sheath of 5mm outer diameter surrounds the L3/L4 region. Apply a fully fixed cylindrical support to the sheath. Apply a 20 N-mm torsional moment at the L2-L3 junction. Fix the jaw tip and report the reaction force there as the cutting force. Perform static structural analysis." 2>&1 | tee ~/feagpt_scissor_force.log
 ```
 
 Compare the reported tip reaction force to **0.654 N**.
@@ -259,7 +339,7 @@ Compare the reported tip reaction force to **0.654 N**.
 ### 5c. Additional jaw opening (reverse sheath travel)
 
 ```bash
-feagpt run "Analyze a monolithic compliant forceps-scissors surgical instrument, 5mm overall diameter, 15mm overall length, made of 316L stainless steel with Young's modulus 193000 MPa, Poisson's ratio 0.3, density 8000 kg/m^3. The jaw mechanism is a chain of straight flexure beam links, mirrored about the centerline: L1=3mm rear actuation link, L2=4mm connector link, L3=8mm main flexure beam inclined at 6 degrees to the centerline passing through the sheath, L4=9mm jaw beam, L5=2mm and L6=2mm jaw-tip segments inclined at 2 degrees forming a sharp cutting tip, and a 0.85mm lever link L7 perpendicular to L3 near the sheath entrance. Beam cross-section width 0.4mm. Extrude L1 and L2 with thickness 1mm; extrude L4, L5, and L6 with thickness 0.5mm. A rigid cylindrical sheath of 5mm outer diameter surrounds the L3/L4 region. Fix the jaw tip end. Apply a 2mm displacement to the sheath in the reverse axial direction, opposite the jaw-opening direction. Perform static structural analysis and report the additional jaw-tip displacement beyond the neutral position." 2>&1 | tee ~/feagpt_forceps_additional_opening.log
+python main.py run "Analyze a monolithic compliant forceps-scissors surgical instrument, 5mm overall diameter, 15mm overall length, made of 316L stainless steel with Young's modulus 193000 MPa, Poisson's ratio 0.3, density 8000 kg/m^3. The jaw mechanism is a chain of straight flexure beam links, mirrored about the centerline: L1=3mm rear actuation link, L2=4mm connector link, L3=8mm main flexure beam inclined at 6 degrees to the centerline passing through the sheath, L4=9mm jaw beam, L5=2mm and L6=2mm jaw-tip segments inclined at 2 degrees forming a sharp cutting tip, and a 0.85mm lever link L7 perpendicular to L3 near the sheath entrance. Beam cross-section width 0.4mm. Extrude L1 and L2 with thickness 1mm; extrude L4, L5, and L6 with thickness 0.5mm. A rigid cylindrical sheath of 5mm outer diameter surrounds the L3/L4 region. Fix the jaw tip end. Apply a 2mm displacement to the sheath in the reverse axial direction, opposite the jaw-opening direction. Perform static structural analysis and report the additional jaw-tip displacement beyond the neutral position." 2>&1 | tee ~/feagpt_forceps_additional_opening.log
 ```
 
 Compare the reported additional displacement to **0.29mm**.
@@ -299,14 +379,27 @@ rejection, or a silently-wrong result, are all useful outcomes to report.
 
 - **`ccx: command not found`** — you're in a shell where `conda activate
   feagpt` wasn't run. `source /opt/conda/bin/activate feagpt` first.
-- **`ModuleNotFoundError: No module named 'FreeCAD'`** — same cause, or
-  conda-forge's `freecad` didn't put its Python bindings on `sys.path`
-  correctly for your Python version; confirm `python3 -c "import FreeCAD"`
-  *inside* the activated `feagpt` env before debugging further downstream.
-- **Gemini API errors (401/403/quota)** — confirm `echo $GEMINI_API_KEY` is
-  non-empty in the *current* shell (env vars don't persist across new tmux
-  windows/panes — re-export in each one), and that the pod has outbound
-  network access to `generativelanguage.googleapis.com`.
+- **`ModuleNotFoundError: No module named 'FreeCAD'`** — known fix #2 (§3):
+  conda-forge's `freecad` puts its compiled bindings in `$CONDA_PREFIX/lib`,
+  not `site-packages`, so they're never on `sys.path` by default. The
+  current bootstrap script bakes a `PYTHONPATH` fix into a conda
+  `activate.d` hook so this should self-heal on `conda activate feagpt`; if
+  it still happens, check `echo $PYTHONPATH` includes `$CONDA_PREFIX/lib`
+  and that the hook files exist under
+  `$CONDA_PREFIX/etc/conda/activate.d/`.
+- **`OSError: libXft.so.2: cannot open shared object file` on `import
+  gmsh`** — known fix #1 (§3): `requirements.txt` pins `gmsh` via pip,
+  which shadows the conda-forge `gmsh` with a PyPI wheel needing a system
+  X11 font library not present on a stock pod. Fixed by the bootstrap's
+  `apt-get install libxft2` step; if it recurs, run that manually and
+  re-check with `python3 -c "import gmsh"`.
+- **`feagpt: command not found`, or `pip install -e .` fails with
+  `AssertionError: Exactly one .egg-info should have been produced, but
+  found 0`** — known fix #3 (§3): this repo's `setup.py` is empty and has
+  no `pyproject.toml` or `entry_points`, so there is no `feagpt` console
+  command to install, full stop — this isn't a transient install failure to
+  retry. Use `python main.py run "..."` (also `interactive`, `batch`) from
+  `~/FeaGPT` instead; confirm with `python3 main.py --help`.
 - **Generated FreeCAD script rejected by the validator** — the paper
   describes a 3-layer check (AST syntax, 18-op security blacklist incl.
   `os.system`/`eval`, FreeCAD topology feasibility, §II.C). If a legitimate
@@ -322,6 +415,19 @@ rejection, or a silently-wrong result, are all useful outcomes to report.
   directory for the `.inp`/`.dat`/`.sta` files CalculiX writes and inspect
   the `.sta` file's iteration log directly; this is standard CalculiX
   debugging, unrelated to FeaGPT's LLM layer.
+- **Gemini API errors (401/403/quota)** — confirm `echo $GEMINI_API_KEY` is
+  non-empty in the *current* shell (env vars don't persist across new tmux
+  windows/panes — re-set in each one; use the `read -s -p` snippet in §3
+  rather than typing the raw key inline so it never lands in shell
+  history), and that the pod has outbound network access to
+  `generativelanguage.googleapis.com`. Note there's also no
+  `python-dotenv`/`load_dotenv()` anywhere in this repo — `.env` /
+  `.env.example` are not actually read despite existing; a real exported
+  env var is the only thing `feagpt/config.py` looks at. If a key is ever
+  exposed somewhere it shouldn't be (chat log, committed file, shared
+  terminal), rotate it immediately at
+  [Google AI Studio](https://aistudio.google.com/apikey) rather than
+  assuming the exposure can be cleaned up after the fact.
 
 ## 7. Trying a different Gemini model version
 
