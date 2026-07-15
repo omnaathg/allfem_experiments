@@ -187,6 +187,20 @@ else
     git -C "$REPO_DIR" pull --ff-only || true
 fi
 cd "$REPO_DIR"
+
+# Known fixes #4-#10 (§3.5): the repo as published never actually runs its
+# own README example end-to-end -- config loading, geometry export, BC/load
+# application, and material units are all broken. Patch file lives
+# alongside this runbook; see §3.5 for what each hunk fixes and why.
+echo "Applying known FeaGPT code fixes (see runbook §3.5)..."
+curl -fsSL https://raw.githubusercontent.com/omnaathg/allfem_experiments/main/feagpt_bugfixes.patch -o /tmp/feagpt_bugfixes.patch
+if git apply --check /tmp/feagpt_bugfixes.patch 2>/dev/null; then
+    git apply /tmp/feagpt_bugfixes.patch
+    echo "Bug fixes applied."
+else
+    echo "Patch did not apply cleanly (already applied, or upstream changed) -- check manually against §3.5."
+fi
+
 pip install -r requirements.txt
 # Known fix #3: expected to fail on the repo state described above.
 # Non-fatal; use `python main.py run ...` regardless of outcome.
@@ -233,6 +247,127 @@ it as compromised and rotate it at
 [Google AI Studio](https://aistudio.google.com/apikey) immediately rather
 than trying to scrub the exposure after the fact.
 
+## 3.5 Known FeaGPT code bugs (patched automatically above)
+
+**Updated after actually running test case 1 to completion on 2026-07-15.**
+The bootstrap script's patch step (§3) fixes all seven of these
+automatically by applying `feagpt_bugfixes.patch` (checked into this repo
+alongside this runbook) to the freshly-cloned `~/FeaGPT`. This section
+exists so you know *why* each hunk is there and can diagnose a failure if
+the patch stops applying cleanly against a newer upstream commit. None of
+this is environment-specific — it reproduces on any pod. Before these
+fixes, **FeaGPT's own README worked example never ran to completion**, at
+any stage past config loading.
+
+1. **Config never loaded, API key silently ignored.** `main.py` called
+   `FeaGPTConfig(ctx.obj["config_path"])` — the dataclass's positional
+   constructor — instead of the `FeaGPTConfig.from_yaml(...)` classmethod
+   that actually parses YAML and applies `GEMINI_API_KEY`. Since `llm` is
+   the first dataclass field, this silently set `config.llm` to the literal
+   string `"config.yaml"`, and every other field stayed at its hardcoded
+   default. Every subcommand (`run`, `interactive`, `batch`) had this bug.
+2. **`config.yaml` itself wasn't valid YAML.** Every line was indented two
+   spaces more than the line before it (a "staircase" reaching ~150 spaces
+   by the end of a 99-line file) — a `yaml.ParserError`. This was never
+   caught before because bug #1 meant `from_yaml()` was never actually
+   called on it.
+3. **`feagpt` CLI doesn't exist.** `setup.py` is empty, no `pyproject.toml`,
+   no `entry_points` anywhere in the repo. Not fixed by the patch (nothing
+   to patch) — use `python main.py run "..."` throughout, as already
+   reflected in §4/§5 below.
+4. **Geometry export used a module that doesn't exist.** All three
+   geometry generators (`naca_wing`, `cantilever_beam`, `plate_with_hole`)
+   in `feagpt/geometry/generator.py` did `import FreeCAD, Part,
+   importerStep` and called `importerStep.export(...)` — there is no
+   `importerStep` module in any FreeCAD version. The correct module is
+   `Import` (`Import.export(...)`). Every geometry generation call failed.
+5. **Simulation stage never actually built the CalculiX deck.**
+   `pipeline.py`'s `_run_simulation` called `self._simulator.run(mesh_path,
+   spec, output_dir)` directly — but `FEASimulator.run()` only takes
+   `(input_file, output_dir)`, and there's a separate
+   `generate_input_deck(spec, mesh_file, output_path)` method that actually
+   writes material/BC/load cards into a real `.inp` file, which was never
+   called at all. Fixed by generating the deck first, then running it.
+6. **CalculiX invoked with the wrong argument format.** `simulator.py`
+   passed `-i <full_path>.inp` to `ccx`; CalculiX's `-i` flag wants the job
+   name **without** the `.inp` extension (it appends `.inp` itself), so it
+   looked for `job.inp.inp` and failed instantly with an empty stderr
+   (`result.stderr` was blank because the error went to stdout). Fixed by
+   passing `job_name` (the path stem) instead.
+7. **BC/load node sets never existed, three compounding ways.** This was
+   the deepest one:
+   - `simulator.py`'s `generate_input_deck()` hardcodes literal `NFIX`/
+     `NLOAD` node-set names in its `*BOUNDARY`/`*CLOAD` cards, but never
+     reads `bc.get("location")` / `load.get("location")` from `spec` at
+     all — so nothing it emits was ever going to match whatever the mesher
+     actually named things.
+   - `mesher.py`'s `_create_physical_groups()` created **element sets**
+     (Gmsh 2D physical groups export as `*ELSET`, not `*NSET`) named after
+     those same free-text `location` strings (e.g. `left_edge`,
+     `top_edge`) — but CalculiX's `*BOUNDARY`/`*CLOAD` require **node
+     sets**. Even with matching names, the type was wrong.
+   - Underneath both: which face got which physical group was chosen by
+     **raw index order** from `gmsh.model.occ.getEntities(2)`
+     (`surfaces[i]`) — not by any actual geometric check that a face is
+     the fixed end vs. the free end.
+   - Fixed by adding `_write_bc_load_nsets()` to `mesher.py`: identifies the
+     fixed/free faces by their bounding-box X-extent against the model's
+     global bounding box (min-X face = fixed end, max-X face = free end),
+     writes `NFIX` as *all* nodes on the fixed face (a proper root
+     constraint) and `NLOAD` as the *single* node nearest the free face's
+     centroid — deliberately a single node, not the whole face, because
+     `*CLOAD` applies its magnitude once per node in the set, and the free
+     end's node count would otherwise multiply a "1000N total" load into
+     "1000N × node count." The old positional 2D physical-group creation in
+     `_create_physical_groups()` was removed entirely (nothing downstream
+     ever read it by name, and its exported surface elements are what
+     caused bug worth calling out separately below).
+   - Side effect of removing those 2D physical groups: gmsh's Abaqus/
+     CalculiX `.inp` writer had also been exporting the boundary surface
+     mesh as `CPS6` (plane-stress) elements, which CalculiX rejects outright
+     for a 3D solid (`should lie in the z=0 plane`). Removing the unused
+     groups stopped gmsh from emitting them.
+8. **Material properties used raw SI units on a mm/N-scaled model.**
+   Geometry is generated in millimeters (`Part.makeBox` from the spec's
+   `*_mm` fields) and loads are applied directly in Newtons, so CalculiX
+   needs a consistent mm/N/tonne system — E and density need to be in MPa
+   (N/mm²) and tonne/mm³. Instead, `generate_input_deck()` wrote the raw SI
+   values from `spec["material"]` (Pa, kg/m³) straight into the deck.
+   Verified empirically on the cantilever case: reported tip deflection was
+   exactly ~10^6 too small (Pa vs. MPa is off by 10^6). Fixed by converting
+   `E / 1e6` and `density * 1e-12` when writing the material block.
+9. **`config.simulation.num_threads` was dead config.** Present in the
+   dataclass and settable from `config.yaml`, but `simulator.py` never
+   passed it to the CalculiX subprocess as `OMP_NUM_THREADS` (or the
+   CalculiX-specific `CCX_NPROC_STIFFNESS`/`CCX_NPROC_EQUATION_SOLVER`
+   vars) — so it always ran single-threaded regardless of what was
+   configured. On a ~213K-element mesh (the cantilever case's "fine"
+   density; 924,954 equations), single-threaded CalculiX didn't finish
+   inside the default 600s timeout. Fixed by wiring all three env vars from
+   `config.simulation.num_threads`, and bumped `config.yaml` to
+   `num_threads: 16` / `timeout: 1200` given a reasonably large pod (this
+   session had 128 cores available). CalculiX's default `spooles` solver
+   still factors single-threaded regardless (only matrix assembly and
+   stress recovery parallelize) — expect a large mesh to still take
+   several minutes; if that's too slow, a coarser mesh density is a real
+   lever (§3's density tiers), not another bug to chase.
+10. **Stage 5 (Analysis) is permanently disabled.**
+    `feagpt.analysis.analyzer` doesn't export a `ResultAnalyzer` class (or
+    it was renamed) — `pipeline.py` catches this at init as a non-fatal
+    warning, so every run silently skips post-processing. Practical
+    consequence: `results_data` (max stress, displacement, safety factor)
+    is never populated even on a fully successful solve — pull results
+    straight from CalculiX's `.frd` output instead (see the cantilever
+    beam result below for the parsing approach). **Not fixed by the
+    patch** — implementing it would mean writing FeaGPT's actual analysis
+    module, which is a much larger lift than the fixes above; flagged here
+    so it's not mistaken for another quick patch.
+
+With all of the above except #3 and #10 fixed, the cantilever beam case
+(§4) now runs end-to-end: reported tip deflection came out to **0.393mm**
+against the **0.400mm** analytical target (1.6% deviation, comfortably
+inside the 15% tolerance).
+
 ---
 
 ## 4. Test case 1 — cantilever beam
@@ -268,10 +403,32 @@ run it from `~/FeaGPT` with the `feagpt` conda env active:
 python main.py run "Analyze a cantilever beam, 500mm long, 50mm square cross-section, steel, with 1000N downward force at the free end" 2>&1 | tee ~/feagpt_beam.log
 ```
 
-Check the printed max von Mises stress / tip deflection / safety factor
-against the analytical deflection above (0.400mm; expect the FEM answer to
-be somewhat stiffer/softer than beam theory depending on mesh — same 15%
-tolerance convention as the ALL-FEM test is a reasonable bar).
+**With the §3.5 patch applied, this actually ran to completion on
+2026-07-15: tip deflection came out to 0.393mm against the 0.400mm
+analytical target (1.6% deviation — PASS, well within the 15% tolerance).**
+Solve was 924,954 equations via CalculiX's direct solver, ~13 minutes
+wall-clock on 16 threads. Max von Mises stress came out to ~164 MPa, at the
+exact loaded node — that's an expected FEM point-load artifact (a true
+concentrated force in a continuum mesh produces locally unbounded stress
+right at the node, independent of mesh quality), not something to chase.
+
+Because Stage 5/Analysis is disabled (§3.5, known fix #10), `main.py`'s own
+printed "Max stress"/"Max displacement" lines will show `N/A` regardless of
+solve success — pull the real numbers from CalculiX's `.frd` output
+instead. The Y-displacement of the `NLOAD` node (logged by `mesher.py` at
+meshing time, e.g. "NLOAD: node 3630 on free face") is the tip deflection;
+find it in the `*DISP` block:
+
+```bash
+NODE=3630  # substitute the node number mesher.py logged for this run
+awk '/DISP/{c++} c==1' results/job.frd | grep -E "^ -1 *${NODE} "
+```
+
+The three values on that line are X/Y/Z displacement in mm (Y is the
+loaded direction here). For max von Mises stress across the whole model,
+parse the `*STRESS` block (6 tensor components per node: Sxx, Syy, Szz,
+Sxy, Syz, Szx) and compute von Mises directly — there's no single grep for
+this one; a short Python loop over the block is simplest.
 
 ---
 

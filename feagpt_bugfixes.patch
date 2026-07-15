@@ -1,0 +1,487 @@
+diff --git a/config.yaml b/config.yaml
+index f0e23d9..71d5d80 100644
+--- a/config.yaml
++++ b/config.yaml
+@@ -1,100 +1,102 @@
+-# FeaGPT Configuration
+-# Copy this file and set your API key before running
+-
+-llm:
+-  provider: "gemini"
+-    model: "gemini-2.5-pro"
+-      api_key: "${GEMINI_API_KEY}"
+-        temperature: 0.1
+-          max_tokens: 8192
+-
+-          knowledge_base:
+-            embedding_model: "all-MiniLM-L6-v2"
+-              embedding_dim: 384
+-                similarity_threshold: 0.85
+-                  materials_path: "knowledge/materials.json"
+-                    geometry_patterns_path: "knowledge/geometry_patterns.json"
+-                      solver_configs_path: "knowledge/solver_configs.json"
+-
+-                      geometry:
+-                        output_format: "step"
+-                          freecad_path: null  # Auto-detect; set to explicit path if needed
+-                            validation:
+-                                check_closed_volume: true
+-                                    check_self_intersection: true
+-                                        tolerance_mm: 0.1
+-                                          blacklisted_operations:
+-                                              - "os.system"
+-                                                  - "os.popen"
+-                                                      - "subprocess.call"
+-                                                          - "subprocess.run"
+-                                                              - "subprocess.Popen"
+-                                                                  - "eval"
+-                                                                      - "exec"
+-                                                                          - "__import__"
+-                                                                              - "importlib"
+-                                                                                  - "shutil.rmtree"
+-                                                                                      - "os.remove"
+-                                                                                          - "os.unlink"
+-                                                                                              - "os.rmdir"
+-                                                                                                  - "socket"
+-                                                                                                      - "http"
+-                                                                                                          - "urllib"
+-                                                                                                              - "requests"
+-
+-                                                                                                              meshing:
+-                                                                                                                backend: "gmsh"
+-                                                                                                                  levels:
+-                                                                                                                      ultra_fine:
+-                                                                                                                            min_size: 0.2
+-                                                                                                                                  max_size: 1.0
+-                                                                                                                                        description: "Thin-walled structures, feature size ~0.2mm"
+-                                                                                                                                            fine:
+-                                                                                                                                                  min_size: 0.5
+-                                                                                                                                                        max_size: 3.0
+-                                                                                                                                                              description: "Standard precision, feature size ~1.0mm"
+-                                                                                                                                                                  medium:
+-                                                                                                                                                                        min_size: 2.0
+-                                                                                                                                                                              max_size: 8.0
+-                                                                                                                                                                                    description: "Preliminary design, feature size ~2.0mm"
+-                                                                                                                                                                                        coarse:
+-                                                                                                                                                                                              min_size: 5.0
+-                                                                                                                                                                                                    max_size: 20.0
+-                                                                                                                                                                                                          description: "Rapid exploration, feature size ~5.0mm"
+-                                                                                                                                                                                                            default_level: "fine"
+-                                                                                                                                                                                                              element_type: "C3D10"
+-
+-                                                                                                                                                                                                              simulation:
+-                                                                                                                                                                                                                solver: "calculix"
+-                                                                                                                                                                                                                  calculix_path: "ccx"
+-                                                                                                                                                                                                                    max_iterations: 100
+-                                                                                                                                                                                                                      convergence_tolerance: 1.0e-6
+-                                                                                                                                                                                                                        output_format: "frd"
+-
+-                                                                                                                                                                                                                        analysis:
+-                                                                                                                                                                                                                          methods:
+-                                                                                                                                                                                                                              - "pareto"
+-                                                                                                                                                                                                                                  - "sensitivity"
+-                                                                                                                                                                                                                                      - "fatigue"
+-                                                                                                                                                                                                                                          - "surrogate"
+-                                                                                                                                                                                                                                              - "clustering"
+-                                                                                                                                                                                                                                                fatigue:
+-                                                                                                                                                                                                                                                    sn_curve: "basquin"
+-                                                                                                                                                                                                                                                        r_ratio: 0.0
+-
+-                                                                                                                                                                                                                                                        batch:
+-                                                                                                                                                                                                                                                          max_workers: 10
+-                                                                                                                                                                                                                                                            max_batch_size: 500
+-                                                                                                                                                                                                                                                              memory_per_case_mb: 512
+-                                                                                                                                                                                                                                                                retry_count: 3
+-                                                                                                                                                                                                                                                                  isolation: true
+-
+-                                                                                                                                                                                                                                                                  output:
+-                                                                                                                                                                                                                                                                    directory: "results"
+-                                                                                                                                                                                                                                                                      save_intermediate: true
+-                                                                                                                                                                                                                                                                        plot_format: "png"
+-                                                                                                                                                                                                                                                                          dpi: 300
+-
+-                                                                                                                                                                                                                                                                          logging:
+-                                                                                                                                                                                                                                                                            level: "INFO"
+-                                                                                                                                                                                                                                                                              file: "feagpt.log"
+\ No newline at end of file
++# FeaGPT Configuration
++# Copy this file and set your API key before running
++
++llm:
++  provider: "gemini"
++  model: "gemini-2.5-flash"
++  api_key: "${GEMINI_API_KEY}"
++  temperature: 0.1
++  max_tokens: 8192
++
++knowledge_base:
++  embedding_model: "all-MiniLM-L6-v2"
++  embedding_dim: 384
++  similarity_threshold: 0.85
++  materials_path: "knowledge/materials.json"
++  geometry_patterns_path: "knowledge/geometry_patterns.json"
++  solver_configs_path: "knowledge/solver_configs.json"
++
++geometry:
++  output_format: "step"
++  freecad_path: null  # Auto-detect; set to explicit path if needed
++  validation:
++    check_closed_volume: true
++    check_self_intersection: true
++    tolerance_mm: 0.1
++    blacklisted_operations:
++      - "os.system"
++      - "os.popen"
++      - "subprocess.call"
++      - "subprocess.run"
++      - "subprocess.Popen"
++      - "eval"
++      - "exec"
++      - "__import__"
++      - "importlib"
++      - "shutil.rmtree"
++      - "os.remove"
++      - "os.unlink"
++      - "os.rmdir"
++      - "socket"
++      - "http"
++      - "urllib"
++      - "requests"
++
++meshing:
++  backend: "gmsh"
++  levels:
++    ultra_fine:
++      min_size: 0.2
++      max_size: 1.0
++      description: "Thin-walled structures, feature size ~0.2mm"
++    fine:
++      min_size: 0.5
++      max_size: 3.0
++      description: "Standard precision, feature size ~1.0mm"
++    medium:
++      min_size: 2.0
++      max_size: 8.0
++      description: "Preliminary design, feature size ~2.0mm"
++    coarse:
++      min_size: 5.0
++      max_size: 20.0
++      description: "Rapid exploration, feature size ~5.0mm"
++  default_level: "fine"
++  element_type: "C3D10"
++
++simulation:
++  solver: "calculix"
++  calculix_path: "ccx"
++  max_iterations: 100
++  convergence_tolerance: 1.0e-6
++  output_format: "frd"
++  num_threads: 16
++  timeout: 1200
++
++analysis:
++  methods:
++    - "pareto"
++    - "sensitivity"
++    - "fatigue"
++    - "surrogate"
++    - "clustering"
++  fatigue:
++    sn_curve: "basquin"
++    r_ratio: 0.0
++
++batch:
++  max_workers: 10
++  max_batch_size: 500
++  memory_per_case_mb: 512
++  retry_count: 3
++  isolation: true
++
++output:
++  directory: "results"
++  save_intermediate: true
++  plot_format: "png"
++  dpi: 300
++
++logging:
++  level: "INFO"
++  file: "feagpt.log"
+diff --git a/feagpt/geometry/generator.py b/feagpt/geometry/generator.py
+index f2f779f..33235ca 100644
+--- a/feagpt/geometry/generator.py
++++ b/feagpt/geometry/generator.py
+@@ -60,7 +60,7 @@ class GeometryGenerator:
+         out_str = str(out_path)
+ 
+         script_lines = [
+-            "import FreeCAD, Part, importerStep",
++            "import FreeCAD, Part, Import",
+             "import numpy as np",
+             "",
+             'doc = FreeCAD.newDocument("NACAwing")',
+@@ -97,7 +97,7 @@ class GeometryGenerator:
+             "profile_face = Part.Face(profile_wire)",
+             "shell_solid = profile_face.extrude(FreeCAD.Vector(0, 0, span))",
+             "Part.show(shell_solid)",
+-            f'importerStep.export([doc.Objects[-1]], "{out_str}")',
++            f'Import.export([doc.Objects[-1]], "{out_str}")',
+         ]
+         return "\n".join(script_lines)
+ 
+@@ -111,11 +111,11 @@ class GeometryGenerator:
+         out_str = str(out_path)
+ 
+         script_lines = [
+-            "import FreeCAD, Part, importerStep",
++            "import FreeCAD, Part, Import",
+             'doc = FreeCAD.newDocument("beam")',
+             f"beam = Part.makeBox({length}, {width}, {height})",
+             "Part.show(beam)",
+-            f'importerStep.export([doc.Objects[-1]], "{out_str}")',
++            f'Import.export([doc.Objects[-1]], "{out_str}")',
+         ]
+         return "\n".join(script_lines)
+ 
+@@ -130,7 +130,7 @@ class GeometryGenerator:
+         out_str = str(out_path)
+ 
+         script_lines = [
+-            "import FreeCAD, Part, importerStep",
++            "import FreeCAD, Part, Import",
+             'doc = FreeCAD.newDocument("plate")',
+             f"plate = Part.makeBox({length}, {width}, {thick},",
+             f"    FreeCAD.Vector(-{length}/2, -{width}/2, 0))",
+@@ -138,7 +138,7 @@ class GeometryGenerator:
+             "    FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(0, 0, 1))",
+             "result = plate.cut(hole)",
+             "Part.show(result)",
+-            f'importerStep.export([doc.Objects[-1]], "{out_str}")',
++            f'Import.export([doc.Objects[-1]], "{out_str}")',
+         ]
+         return "\n".join(script_lines)
+ 
+diff --git a/feagpt/meshing/mesher.py b/feagpt/meshing/mesher.py
+index 6934839..2b9b13b 100644
+--- a/feagpt/meshing/mesher.py
++++ b/feagpt/meshing/mesher.py
+@@ -79,11 +79,85 @@ class AdaptiveMesher:
+ 
+         # Export to CalculiX INP format
+         gmsh.write(str(output_path))
++
++        # simulator.generate_input_deck() emits *BOUNDARY/*CLOAD cards that
++        # reference literal node sets NFIX/NLOAD -- these are never produced
++        # by gmsh's own Abaqus/CalculiX export (which only writes ELSETs for
++        # surface physical groups, not node sets), so without this the deck
++        # references undefined sets and CalculiX refuses to run.
++        self._write_bc_load_nsets(spec, output_path)
++
+         gmsh.clear()
+ 
+         logger.info(f"Mesh saved: {output_path}")
+         return output_path
+ 
++    def _write_bc_load_nsets(self, spec: Dict, mesh_path: Path):
++        """
++        Identify the fixed-end and free-end faces by geometric extent (min/max
++        X of the model bounding box) and append CalculiX *NSET definitions:
++        NFIX (all nodes on the fixed face, a proper root constraint) and
++        NLOAD (the single node nearest the free face's centroid, so
++        generate_input_deck's *CLOAD applies the full magnitude once rather
++        than once per node in the set).
++        """
++        gmsh = self._gmsh
++        bcs = spec.get("boundary_conditions", [])
++        loads = spec.get("loads", [])
++        if not bcs or not loads:
++            return
++
++        xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(-1, -1)
++        tol = 1e-6 * max(xmax - xmin, 1.0)
++
++        fixed_face = None
++        free_face = None
++        for dim, tag in gmsh.model.occ.getEntities(2):
++            sxmin, symin, szmin, sxmax, symax, szmax = gmsh.model.getBoundingBox(dim, tag)
++            if abs(sxmin - xmin) < tol and abs(sxmax - xmin) < tol:
++                fixed_face = tag
++            if abs(sxmin - xmax) < tol and abs(sxmax - xmax) < tol:
++                free_face = tag
++
++        if fixed_face is None or free_face is None:
++            logger.warning(
++                "Could not identify fixed/free end faces by geometry; "
++                "NFIX/NLOAD node sets not written."
++            )
++            return
++
++        fix_node_tags, _, _ = gmsh.model.mesh.getNodes(2, fixed_face, includeBoundary=True)
++
++        load_node_tags, load_coords, _ = gmsh.model.mesh.getNodes(2, free_face, includeBoundary=True)
++        cy = (ymin + ymax) / 2.0
++        cz = (zmin + zmax) / 2.0
++        best_tag, best_dist = None, None
++        for i, tag in enumerate(load_node_tags):
++            y = load_coords[3 * i + 1]
++            z = load_coords[3 * i + 2]
++            d = (y - cy) ** 2 + (z - cz) ** 2
++            if best_dist is None or d < best_dist:
++                best_dist, best_tag = d, tag
++
++        def _nset_block(name, tags):
++            lines = [f"*NSET, NSET={name}"]
++            tags = [int(t) for t in tags]
++            for i in range(0, len(tags), 8):
++                lines.append(", ".join(str(t) for t in tags[i:i + 8]))
++            return "\n".join(lines)
++
++        with open(mesh_path, "a") as f:
++            f.write("\n")
++            f.write(_nset_block("NFIX", fix_node_tags))
++            f.write("\n")
++            f.write(_nset_block("NLOAD", [best_tag]))
++            f.write("\n")
++
++        logger.info(
++            f"NFIX: {len(fix_node_tags)} nodes on fixed face (tag {fixed_face}); "
++            f"NLOAD: node {best_tag} on free face (tag {free_face})"
++        )
++
+     def _apply_refinement(self, zones: List[str], hmin: float, hmax: float):
+         gmsh = self._gmsh
+         if not zones:
+@@ -131,16 +205,14 @@ class AdaptiveMesher:
+         if volumes:
+             gmsh.model.addPhysicalGroup(3, [v[1] for v in volumes], name="Eall")
+ 
+-        # Create surface groups for BCs and loads
+-        if surfaces:
+-            for i, bc in enumerate(bcs):
+-                loc = bc.get("location", f"bc_{i}").replace(" ", "_")
+-                # Assign first surface as BC
+-                if i < len(surfaces):
+-                    gmsh.model.addPhysicalGroup(2, [surfaces[i][1]], name=loc)
+-
+-            for i, load in enumerate(loads):
+-                loc = load.get("location", f"load_{i}").replace(" ", "_")
+-                idx = len(bcs) + i
+-                if idx < len(surfaces):
+-                    gmsh.model.addPhysicalGroup(2, [surfaces[idx][1]], name=loc)
++        # Note: this used to also add 2D physical groups here for each BC/load
++        # surface, indexed positionally (surfaces[i]) rather than by actual
++        # geometric location, and named after the planner's free-text
++        # "location" string. Nothing downstream ever read those groups by
++        # name -- generate_input_deck() hardcodes NFIX/NLOAD literally -- and
++        # gmsh's Abaqus/CalculiX .inp writer exports any grouped surface as
++        # CPS6 (plane-stress) elements, which CalculiX then rejects outright
++        # for a 3D solid ("should lie in the z=0 plane"). NFIX/NLOAD are now
++        # identified directly by geometry and written as *NSET blocks in
++        # _write_bc_load_nsets(), so no 2D physical groups are needed at all;
++        # leaving surfaces ungrouped keeps gmsh from emitting them as elements.
+diff --git a/feagpt/pipeline.py b/feagpt/pipeline.py
+index 576c6d8..c1db18f 100644
+--- a/feagpt/pipeline.py
++++ b/feagpt/pipeline.py
+@@ -265,7 +265,9 @@ class GMSAPipeline:
+         """Stage 4: Configure and run CalculiX FEA."""
+         if self._simulator is None:
+             raise RuntimeError("Simulation module not initialized")
+-        return self._simulator.run(mesh_path, spec, output_dir)
++        deck_path = output_dir / "job.inp"
++        self._simulator.generate_input_deck(spec, mesh_path, deck_path)
++        return self._simulator.run(deck_path, output_dir)
+ 
+     def _run_analysis(self, sim_results: Dict, spec: Dict) -> Dict:
+         """Stage 5: Analyze results based on objectives."""
+diff --git a/feagpt/simulation/simulator.py b/feagpt/simulation/simulator.py
+index bece2c2..23b4a34 100644
+--- a/feagpt/simulation/simulator.py
++++ b/feagpt/simulation/simulator.py
+@@ -5,6 +5,7 @@ Manages CalculiX solver execution, input file generation,
+ and result collection.
+ """
+ import logging
++import os
+ import subprocess
+ import time
+ from pathlib import Path
+@@ -25,6 +26,7 @@ class FEASimulator:
+         self.config = config
+         self.solver_path = config.simulation.calculix_path
+         self.timeout = config.simulation.timeout
++        self.num_threads = config.simulation.num_threads
+ 
+     def run(
+         self,
+@@ -48,12 +50,17 @@ class FEASimulator:
+         start_time = time.time()
+ 
+         try:
++            env = os.environ.copy()
++            env["OMP_NUM_THREADS"] = str(self.num_threads)
++            env["CCX_NPROC_STIFFNESS"] = str(self.num_threads)
++            env["CCX_NPROC_EQUATION_SOLVER"] = str(self.num_threads)
+             result = subprocess.run(
+-                [self.solver_path, "-i", str(input_file)],
++                [self.solver_path, "-i", job_name],
+                 cwd=str(output_dir),
+                 capture_output=True,
+                 text=True,
+                 timeout=self.timeout,
++                env=env,
+             )
+ 
+             elapsed = time.time() - start_time
+@@ -128,11 +135,19 @@ class FEASimulator:
+         lines.append("")
+ 
+         # Material definition
++        # Geometry is generated in mm (FreeCAD Part.makeBox with *_mm spec
++        # fields) and loads are applied directly in N, so CalculiX needs a
++        # consistent mm/N/tonne unit system: E and density arrive here in SI
++        # (Pa, kg/m^3) from the spec, and must be converted (Pa -> MPa i.e.
++        # N/mm^2, kg/m^3 -> tonne/mm^3) or every result is off by exactly
++        # 10^6 (verified empirically: a 1000N point load produced a tip
++        # deflection 1.02x10^6 smaller than the Euler-Bernoulli analytical
++        # value on the README's own cantilever example).
+         mat = spec.get("material", {})
+         mat_name = mat.get("name", "Material1")
+-        E = mat.get("youngs_modulus", 210e9)
++        E = mat.get("youngs_modulus", 210e9) / 1e6
+         nu = mat.get("poissons_ratio", 0.3)
+-        rho = mat.get("density", 7850)
++        rho = mat.get("density", 7850) * 1e-12
+ 
+         lines.append(f"*MATERIAL, NAME={mat_name}")
+         lines.append("*ELASTIC")
+diff --git a/main.py b/main.py
+index 8282d0f..8d7ec0f 100644
+--- a/main.py
++++ b/main.py
+@@ -35,7 +35,7 @@ def run(ctx, description, output):
+     from feagpt.config import FeaGPTConfig
+     from feagpt.pipeline import GMSAPipeline
+ 
+-    config = FeaGPTConfig(ctx.obj["config_path"])
++    config = FeaGPTConfig.from_yaml(ctx.obj["config_path"])
+     pipeline = GMSAPipeline(config)
+     result = pipeline.run(description, output)
+ 
+@@ -60,7 +60,7 @@ def batch(ctx, description, output, workers):
+     from feagpt.config import FeaGPTConfig
+     from feagpt.pipeline import GMSAPipeline
+ 
+-    config = FeaGPTConfig(ctx.obj["config_path"])
++    config = FeaGPTConfig.from_yaml(ctx.obj["config_path"])
+     if workers:
+         config.batch.max_workers = workers
+     pipeline = GMSAPipeline(config)
+@@ -77,7 +77,7 @@ def interactive(ctx):
+     from feagpt.config import FeaGPTConfig
+     from feagpt.pipeline import GMSAPipeline
+ 
+-    config = FeaGPTConfig(ctx.obj["config_path"])
++    config = FeaGPTConfig.from_yaml(ctx.obj["config_path"])
+     pipeline = GMSAPipeline(config)
+     pipeline.initialize()
+ 
