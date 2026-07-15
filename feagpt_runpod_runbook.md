@@ -362,8 +362,66 @@ any stage past config loading.
     patch** — implementing it would mean writing FeaGPT's actual analysis
     module, which is a much larger lift than the fixes above; flagged here
     so it's not mistaken for another quick patch.
+11. **Novel Synthesis Mode is a complete stub — but the scaffolding around
+    it already exists, half-built.** `_synthesize_novel()` in
+    `feagpt/geometry/generator.py` is:
+    ```python
+    def _synthesize_novel(self, spec: Dict) -> str:
+        raise NotImplementedError(
+            "Novel synthesis requires LLM - configure Gemini API key"
+        )
+    ```
+    unconditional — it never attempts anything, confirmed with genuinely
+    working LLM planning active (see the §5 test case 2b result). What's
+    surprising: the pieces to actually implement this are **already
+    written elsewhere in the repo, just never wired up**:
+    - `feagpt/planning/prompts.py` already defines a complete
+      `GEOMETRY_SYNTHESIS_PROMPT` — a working prompt asking an LLM to
+      generate a FreeCAD Python script from a geometry spec, output-to-STEP
+      requirements included. It has zero callers anywhere in the codebase.
+    - `feagpt/geometry/validators.py` already implements the paper's
+      3-layer validation almost exactly as described (§II.C): syntax/
+      physics/manufacturability checks in `GeometryValidator`, plus a
+      separate `validate_script()` doing the security-blacklist check
+      (`os.system`, `eval`, `subprocess.call`, etc. — string-matching
+      rather than true AST parsing, but functionally the same intent).
+      **Its only caller anywhere in the repo is the test suite**
+      (`tests/test_all.py`) — never the actual pipeline. It passes tests
+      and does nothing at runtime.
+    - `_execute_freecad_script()` (already used by the three working
+      pattern generators) is generic — it just writes a script to disk
+      and runs `freecadcmd` on it. It doesn't care where the script text
+      came from, so it's directly reusable for LLM-generated scripts too.
 
-With all of the above except #3 and #10 fixed, the cantilever beam case
+    **What it would actually take to wire this up (rough estimate):**
+    - *Plumbing (hours, not days):* give `GeometryGenerator` an LLM handle
+      (currently it only holds `self.config` — no client at all; either
+      instantiate its own `genai.GenerativeModel` or thread the planner's
+      through `pipeline.py`'s init), format `GEOMETRY_SYNTHESIS_PROMPT`
+      with the spec + output path, call the LLM, strip markdown code
+      fences from the response (LLMs reliably wrap code in triple-backtick
+      `python` fences despite "output only the script" instructions — the existing
+      JSON-extraction regex in `planner.py` doesn't directly reuse for
+      this), call the already-written `validate_script()` on the result,
+      and hand a passing script to the already-working
+      `_execute_freecad_script()`. This part is genuinely closer to
+      "glue code" than new invention, since every piece already exists.
+    - *The actual open-ended risk:* whether an LLM reliably writes
+      **correct** FreeCAD `Part`/`Sketch` API calls for geometry this
+      intricate — mirrored flexure beams at compound angles (6°/2°), two
+      different extrusion thicknesses, a separate boolean sheath body —
+      is a real CAD-scripting task, not just a plumbing problem. Getting a
+      first end-to-end attempt working is plausibly a few hours once wired
+      up; getting it to *reliably* produce valid, meshable, physically
+      sensible geometry for a shape this complex is open-ended and would
+      likely need at least one retry-with-error-feedback loop (regenerate
+      the script, feeding the FreeCAD/validator error back into the
+      prompt — nothing like that exists anywhere in the repo either) and
+      several rounds of prompt iteration. Budget a day for the wiring plus
+      first attempt; treat reliable success on a shape this complex as a
+      genuinely open research question, not a scoped task.
+
+With all of the above except #3, #10, and #11 fixed, the cantilever beam case
 (§4) now runs end-to-end: reported tip deflection came out to **0.393mm**
 against the **0.400mm** analytical target (1.6% deviation, comfortably
 inside the 15% tolerance).
@@ -493,6 +551,22 @@ python main.py run "Analyze a monolithic compliant forceps-scissors surgical ins
 
 Compare the reported tip reaction force to **0.654 N**.
 
+**Actual result (2026-07-15): FAIL — never reached simulation.** Failed at
+Stage 2/5 (Geometry Generation) with `Novel synthesis requires LLM -
+configure Gemini API key`, even with real, verified-working LLM planning
+(confirmed via a standalone call to `gemini-pro-latest` returning a
+coherent spec that correctly identified this as a
+`monolithic_compliant_cylinder` — correctly *not* one of the three
+hardcoded patterns). This is not a quota/access problem and not the
+rule-based planner's crude keyword match (which, separately, misclassifies
+this prompt as `cantilever_beam` because it contains the word "beam" —
+see §3.5 known fix #7's sibling issue below). It's that
+`_synthesize_novel()` in `feagpt/geometry/generator.py` is an
+unconditional stub — see §3.5 known gap #11 for what it would actually
+take to implement this, since it changes the framing of this result:
+it's not "FeaGPT got the geometry wrong," it's "this code path was never
+built."
+
 ### 5c. Additional jaw opening (reverse sheath travel)
 
 ```bash
@@ -510,9 +584,9 @@ FeaGPT paper):
   intricate one than the wing (multiple angled/tapered segments, a
   sub-mm lever link, a surrounding sheath) built entirely from prose
   rather than the wing's more standard "airfoil + spars + ribs" pattern.
-  Expect Novel Synthesis Mode (no pre-seeded knowledge-base pattern for
-  this shape) to carry more risk of failing the AST/security/topology
-  validator (§II.C) than the beam case.
+  **Confirmed worse than "more risk of failing validation": Novel
+  Synthesis Mode doesn't attempt geometry generation at all** — see §3.5
+  known gap #11.
 - **Self-contact is invisible to the schema.** The paper's own model
   defines three frictionless contact regions between the sheath and the
   flexure beams (Node-Normal-to-Target detection) — FeaGPT's JSON spec
